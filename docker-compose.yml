@@ -1,0 +1,58 @@
+# OpsPilot 一键部署：API + Qdrant + PostgreSQL(pgvector) + Ollama(可选)
+#
+#   docker compose up -d                       # 启用 memory/内置 embedding 的默认栈
+#   docker compose --profile vector up -d      # 加上 Qdrant 与 pgvector
+#   docker compose --profile vector --profile llm up -d   # 再加本地 Ollama
+
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      OPSPILOT_VECTOR_BACKEND: ${OPSPILOT_VECTOR_BACKEND:-memory}
+      OPSPILOT_QDRANT_URL: http://qdrant:6333
+      OPSPILOT_OLLAMA_BASE_URL: http://ollama:11434
+      OPSPILOT_DATABASE_URL: postgresql+psycopg://postgres:postgres@db:5432/opspilot
+      OPSPILOT_KNOWLEDGE_DIR: /app/data/kb
+      OPSPILOT_STATE_DIR: /app/work/state
+    volumes:
+      - ./data:/app/data:ro
+      - ./work/state:/app/work/state
+    depends_on:
+      - qdrant
+      - db
+    profiles: ["", "vector", "llm"]
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    profiles: ["vector"]
+
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: opspilot
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    profiles: ["vector"]
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    profiles: ["llm"]
+
+volumes:
+  qdrant_data:
+  pg_data:
+  ollama_data:
