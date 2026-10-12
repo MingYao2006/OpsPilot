@@ -9,7 +9,7 @@ from langgraph.graph import END, START, StateGraph
 
 from app.config import Settings
 from app.models import Intent, TicketIn, ScoredChunk, Citation
-from app.services.answer import compose_answer
+from app.services.answer import compose_answer, format_history
 from app.services.citation import build_citations
 from app.services.intent import classify_intent
 from app.services.llm import LLMClient
@@ -88,6 +88,7 @@ class AgentState(TypedDict, total=False):
     follow_up: list[str]
     service: str | None
     top_k: int | None
+    history: list[str]
 
 
 def build_agent_graph(llm: LLMClient | None, tickets: TicketStore, search: SearchFn, settings: Settings):
@@ -123,7 +124,7 @@ def build_agent_graph(llm: LLMClient | None, tickets: TicketStore, search: Searc
 
     def retrieve_node(state: AgentState) -> dict:
         hits = search(state["question"], top_k=state.get("top_k"), service=state.get("service"))
-        result = compose_answer(state["question"], hits, llm, settings)
+        result = compose_answer(state["question"], hits, llm, settings, history=state.get("history"))
         return {
             "answer": result.answer,
             "answer_confidence": result.confidence,
@@ -145,7 +146,8 @@ def build_agent_graph(llm: LLMClient | None, tickets: TicketStore, search: Searc
     def chat_node(state: AgentState) -> dict:
         if llm is not None:
             try:
-                return {"answer": llm.chat(_CHAT_SYSTEM, state["question"], json_mode=False)}
+                user = format_history(state.get("history") or []) + state["question"]
+                return {"answer": llm.chat(_CHAT_SYSTEM, user, json_mode=False)}
             except Exception as exc:
                 log.warning("闲聊回复失败，落离线模板：%s", exc)
                 return {

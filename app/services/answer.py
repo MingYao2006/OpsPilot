@@ -33,13 +33,23 @@ def _refuse(hits: list[ScoredChunk], *, offline: bool) -> AnswerPayload:
         answer = "未检索到相关资料，且当前无法生成可靠结论，已转人工处理。"
     return AnswerPayload(answer=answer, used_citations=used, confidence=0.0, needs_human=True)
 
+HISTORY_TURNS = 6
+
+def format_history(history: list[str], *, max_turns: int = HISTORY_TURNS) -> str:
+    """把最近 max_turns 轮历史渲染成提示词前缀；无历史返回空串（零回归）。"""
+    if not history:
+        return ""
+    lines = "\n".join(f"- {turn}" for turn in history[-max_turns:])
+    return f"【对话历史】\n{lines}\n\n"
+
 def compose_answer(
-        question: str, hits: list[ScoredChunk], llm: LLMClient | None, settings: Settings
+        question: str, hits: list[ScoredChunk], llm: LLMClient | None, settings: Settings, *,
+        history: list[str] | None = None,
 ) -> AnswerPayload:
     if  llm is None:
         return _refuse(hits,offline=True)
 
-    user = f"【问题】{question}\n\n【资料】\n{_context(hits)}"
+    user = f"{format_history(history or [])}【问题】{question}\n\n【资料】\n{_context(hits)}"
     last_err: Exception | None = None
     for _ in range(settings.llm_max_retries + 1):  # 解析失败可重试
         raw = llm.chat(SYSTEM, user)

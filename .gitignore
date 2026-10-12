@@ -4,6 +4,7 @@ __pycache__/
 venv/
 .env
 .pytest_cache/
-work/state/
+work/
 *.egg-info/
 .ruff_cache/
+.idea/

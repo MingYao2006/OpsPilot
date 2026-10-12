@@ -25,6 +25,7 @@ def agent(
         "question": payload.question,
         "service": payload.service,
         "top_k": payload.top_k,
+        "history": payload.history,
     })
     intent = state["intent"]
     answer_confidence = state.get("answer_confidence", 0.0)
