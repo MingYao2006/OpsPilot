@@ -5,7 +5,7 @@
 把散落在运维手册、SOP、故障复盘里的隐性知识统一入库，
 通过「混合检索 + 引用溯源」回答问题；不确定时**拒答并转人工**，而不是编造操作步骤。
 
-> 当前进度：**M3 已完成**（混合检索 + 引用溯源/拒答 + LangGraph 意图路由与建单工具）
+> 当前进度：**M4 已完成**（M3 全部 + 真 Function Calling 建单 + 无状态多轮 lite + 工单查询闭环）
 
 ---
 
@@ -142,7 +142,7 @@ graph LR
 
 LangGraph 状态图：`classify` 站先分意图（LLM 主轨，失败落关键词规则轨，`source` 字段如实申报），
 再按意图分流到三个车间：`retrieve`（走 `/v1/ask` 同款检索生成链路）、
-`create_ticket`（LLM 抽取工单四字段；抽取失败或离线则**兜底建单**，回答自带"（兜底建单）"标记）、
+`create_ticket`（真 Function Calling：`chat_with_tools` 走 `tool_calls` 抽四字段；逐级退回 JSON-prompt、再退回**兜底建单**，回答自带"（兜底建单）"标记）、
 `chat`（LLM 闲聊引导；故障时落引导模板并声明原因）。
 工具调用经 `tools_used` 诚实申报，降级全程可见、绝不静默。
 
@@ -172,6 +172,8 @@ curl -X POST http://127.0.0.1:8000/v1/agent \
 ```
 
 > `service` / `top_k` 请求参数已接入 Agent 图：`service` 在检索前经 `set_service_scope` 收口，只返回该服务标签下的文档；`top_k` 控制最终召回截断。
+>
+> 请求体可带 `history`（`list[str]`，无状态多轮 lite）：`retrieve` / `chat` 会把最近 6 轮渲染成「【对话历史】」前缀注入提示词，`create_ticket` 不注入以防串单。
 
 知识库文件支持轻量 frontmatter：
 
@@ -192,7 +194,7 @@ tags: [数据库, 连接池]
 python -m pytest -q
 ```
 
-测试把环境钉死在 `memory + local + fallback`，**不依赖网络与密钥**，共 137 个用例。
+测试把环境钉死在 `memory + local + fallback`，**不依赖网络与密钥**，共 146 个用例。
 
 ---
 
@@ -238,7 +240,7 @@ app/
     logging.py           日志 + request_id 上下文
 data/kb/                 8 篇示例运维知识库
 scripts/seed.py          知识库灌入
-tests/                   137 个用例，离线可跑
+tests/                   146 个用例，离线可跑
 ```
 
 ---
@@ -270,7 +272,7 @@ tests/                   137 个用例，离线可跑
 | 6.3 MCP | 📋 | 未涉及，计划作为工具协议接入 | [punkpeye/awesome-mcp-servers](https://github.com/punkpeye/awesome-mcp-servers) |
 | 7.1 各种范式 | 📋 | ReAct / Plan-Execute 等尚未系统化 | [huggingface/agents-course](https://github.com/huggingface/agents-course) |
 | 7.2 A2A / A2UI / AGUI | 📋 | 未涉及 | [a2aproject/A2A](https://github.com/a2aproject/A2A) |
-| 7.3 Function Calling | 🟡 | JSON-prompt 抽取 + `TicketIn` 契约校验 + 代码兜底的**简化版**；真 `tool_calls` 需扩展 `LLMClient`（M4） | [pguso/ai-agents-from-scratch](https://github.com/pguso/ai-agents-from-scratch) |
+| 7.3 Function Calling | ✅ | 真 OpenAI `tool_calls` 建单（`LLMClient.chat_with_tools`）+ 三级降级（真FC→JSON-prompt→硬兜底），降级全程日志可见 | [pguso/ai-agents-from-scratch](https://github.com/pguso/ai-agents-from-scratch) |
 | 7.4 Skill | 📋 | 未涉及 | [K-Dense-AI/scientific-agent-skills](https://github.com/K-Dense-AI/scientific-agent-skills) |
 | 7.5 Deep Agent | 📋 | 未涉及 | [langchain-ai/deepagents](https://github.com/langchain-ai/deepagents) |
 
@@ -285,7 +287,7 @@ tests/                   137 个用例，离线可跑
 | 8.5 训练框架 DeepSpeed / LlamaFactory | ⛔ | 同上 | [deepspeedai/DeepSpeed](https://github.com/deepspeedai/DeepSpeed) |
 | 9 Transformer 理解 | ⛔ | 无模型结构 / 训练相关代码或文档 | [rasbt/LLMs-from-scratch](https://github.com/rasbt/LLMs-from-scratch) · [karpathy/nanoGPT](https://github.com/karpathy/nanoGPT) |
 
-**补齐顺序**：M3 收官 → M4（多轮对话 + 真 Function Calling）→ 按需补 MCP / A2A / 图 RAG。（参数入图于 D2、工单查询于 D3 已提前完成）
+**补齐顺序**：M4 收官（真 Function Calling + 多轮 lite + 工单查询）→ M5（pgvector 真库 + JWT 真鉴权 + 在线验收）→ 按需补 MCP / A2A / 图 RAG。（参数入图于 D2、工单查询于 D3、真FC于 D4、多轮 lite 于 D5 已提前完成）
 
 ---
 
@@ -296,5 +298,5 @@ tests/                   137 个用例，离线可跑
 | M1 | 入库 + 向量检索 + `/v1/query` | ✅ 已完成 |
 | M2 | BM25 + 加权 RRF + Reranker + 评测基线 | ✅ 已完成 |
 | M3 | LangGraph 意图路由 + 建单工具 + `/v1/agent`（含原 M4 的引用溯源/拒答，已提前） | ✅ 已完成 |
-| M4 | 多轮对话 + 真 Function Calling | 待开始 |
+| M4 | 真 Function Calling 建单 + 无状态多轮 lite + 工单查询闭环 | ✅ 已完成 |
 | M5 | CRAG 自纠正 + SSE 流式 + pgvector/部署实战 + 完整评测报告 | 待开始 |
