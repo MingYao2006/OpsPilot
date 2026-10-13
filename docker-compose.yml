@@ -19,9 +19,15 @@ services:
     volumes:
       - ./data:/app/data:ro
       - ./work/state:/app/work/state
+    # qdrant / db 只存在于 vector profile 下。required: false 让默认栈（memory 后端）
+    # 在没启用 vector profile 时也能正常解析，启用时依旧按依赖顺序启动。
     depends_on:
-      - qdrant
-      - db
+      qdrant:
+        condition: service_started
+        required: false
+      db:
+        condition: service_started
+        required: false
     profiles: ["", "vector", "llm"]
 
   qdrant:
