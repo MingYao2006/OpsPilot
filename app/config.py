@@ -91,6 +91,9 @@ class Settings(BaseSettings):
 
     # ---------- 可选鉴权（留空表示不校验，仅建议 dev 使用）----------
     jwt_secret: str | None = None
+    rate_limit_enabled: bool = False
+    rate_limit_window: int = 60
+    rate_limit: int = 30
 
     # ---------- 校验 ----------
 
