@@ -8,3 +8,5 @@ work/
 *.egg-info/
 .ruff_cache/
 .idea/
+docker-compose.override.yml
+pytest-of-*/
