@@ -1,0 +1,22 @@
+# --- 版本/工具 ---
+.git
+.idea
+.venv
+.venv*/
+.pytest_cache
+*.egg-info
+
+# --- 秘密：绝不进镜像 ---
+.env
+*.env
+!.env.example
+
+# --- 运行产物 / 缓存 ---
+work/
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# --- 测试与文档---
+tests/
+check_env.py
