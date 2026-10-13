@@ -41,3 +41,24 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             elapsed_ms,
         )
         return response
+
+def check_rate_limit(now:float, hits:list[float], limit:int, window_s:float)->tuple[bool, float, list[float]]:
+        """滑动窗口限流判定（纯函数：不读时钟、不改入参）。
+
+        now:      float，当前时间戳（秒）
+        hits:     该键最近的请求时间戳列表（未清理，可能含窗口外的旧值）
+        limit:    窗口内允许的最大请求数
+        window_s: 窗口长度（秒）
+
+        返回 (allowed, retry_after, kept)：
+          allowed     —— 本次是否放行
+          retry_after —— 拒绝时建议等待秒数（放行时为 0.0）
+          kept        —— 判定后应写回的新 hits（已清理 + 视情况追加本次）
+        """
+        recent = [t for t in hits if t > now - window_s]
+        if len(recent) >= limit:
+            retry_after = max(0.0, window_s - (now - recent[0]))
+            kept = recent
+            return False, retry_after, kept
+        else:
+            return True, 0.0, recent + [now]
