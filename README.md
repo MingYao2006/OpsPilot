@@ -1,5 +1,7 @@
 # OpsPilot
 
+[![CI](https://github.com/MingYao2006/OpsPilot/actions/workflows/ci.yml/badge.svg)](https://github.com/MingYao2006/OpsPilot/actions/workflows/ci.yml)
+
 企业内部运维知识 Agent —— 面向一线运维与技术支持团队的 **Agentic RAG** 服务。
 
 把散落在运维手册、SOP、故障复盘里的隐性知识统一入库，
@@ -194,7 +196,7 @@ tags: [数据库, 连接池]
 python -m pytest -q
 ```
 
-测试把环境钉死在 `memory + local + fallback`，**不依赖网络与密钥**，共 146 个用例。
+测试把环境钉死在 `memory + local + fallback`，**不依赖网络与密钥**，共 162 个用例（已由 GitHub Actions CI 在 py3.11 / py3.12 双版本自动把关）。
 
 ---
 
