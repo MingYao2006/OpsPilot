@@ -17,7 +17,7 @@ from app.api.routes import agent
 from app.api.routes import health, ingest, query,tickets
 from app.config import get_settings
 from app.container import build_container
-from app.middleware import RequestContextMiddleware
+from app.middleware import RequestContextMiddleware, RateLimitMiddleware
 from app.utils.logging import configure_logging, get_logger
 
 log = get_logger("opspilot.main")
@@ -71,6 +71,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     # 请求上下文
+    app.add_middleware(RateLimitMiddleware, settings=settings)
     app.add_middleware(RequestContextMiddleware)
     # 设置跨域
     app.add_middleware(

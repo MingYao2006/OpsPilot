@@ -1,12 +1,13 @@
-"""请求上下文中间件：贯穿全链路的 request_id、耗时统计与统一异常日志。"""
+"""HTTP 中间件：请求上下文（request_id、耗时、异常日志）与滑动窗口限流（429）。"""
 
 from __future__ import annotations
 
+import math
 import time
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 
 from app.utils.logging import get_logger, set_request_id
 
@@ -42,23 +43,58 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         )
         return response
 
-def check_rate_limit(now:float, hits:list[float], limit:int, window_s:float)->tuple[bool, float, list[float]]:
-        """滑动窗口限流判定（纯函数：不读时钟、不改入参）。
 
-        now:      float，当前时间戳（秒）
-        hits:     该键最近的请求时间戳列表（未清理，可能含窗口外的旧值）
-        limit:    窗口内允许的最大请求数
-        window_s: 窗口长度（秒）
+def check_rate_limit(
+    now: float, hits: list[float], limit: int, window_s: float
+) -> tuple[bool, float, list[float]]:
+    """滑动窗口限流判定（纯函数：不读时钟、不改入参）。
 
-        返回 (allowed, retry_after, kept)：
-          allowed     —— 本次是否放行
-          retry_after —— 拒绝时建议等待秒数（放行时为 0.0）
-          kept        —— 判定后应写回的新 hits（已清理 + 视情况追加本次）
-        """
-        recent = [t for t in hits if t > now - window_s]
-        if len(recent) >= limit:
-            retry_after = max(0.0, window_s - (now - recent[0]))
-            kept = recent
-            return False, retry_after, kept
-        else:
-            return True, 0.0, recent + [now]
+    now:      float，当前时间戳（秒）
+    hits:     该键最近的请求时间戳列表（未清理，可能含窗口外的旧值）
+    limit:    窗口内允许的最大请求数
+    window_s: 窗口长度（秒）
+
+    返回 (allowed, retry_after, kept)：
+      allowed     —— 本次是否放行
+      retry_after —— 拒绝时建议等待秒数（放行时为 0.0）
+      kept        —— 判定后应写回的新 hits（已清理 + 视情况追加本次）
+    """
+    recent = [t for t in hits if t > now - window_s]
+    if len(recent) >= limit:
+        retry_after = max(0.0, window_s - (now - recent[0]))
+        kept = recent
+        return False, retry_after, kept
+    return True, 0.0, recent + [now]
+
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, settings):
+        super().__init__(app)
+        self.settings = settings
+        self.buckets: dict[str, list[float]] = {}   # 每键 → 窗口内被放行的时间戳
+
+    async def dispatch(self, request: Request, call_next):
+        if not self.settings.rate_limit_enabled:
+            return await call_next(request)
+
+        if request.url.path.startswith("/healthz"):
+            return await call_next(request)
+
+        xff = request.headers.get("x-forwarded-for")
+        key = xff.split(",")[0].strip() if xff else (
+            request.client.host if request.client else "anonymous"
+        )
+
+        allowed, retry_after, kept = check_rate_limit(
+            time.time(), self.buckets.get(key, []),
+            self.settings.rate_limit, self.settings.rate_limit_window,
+        )
+        self.buckets[key] = kept
+
+        if not allowed:
+            return JSONResponse(
+                status_code=429,
+                content={"type": "rate_limited", "detail": "请求过于频繁，请稍后再试"},
+                headers={"Retry-After": str(math.ceil(retry_after))},
+            )
+        return await call_next(request)
