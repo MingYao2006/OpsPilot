@@ -29,6 +29,8 @@ def offline_env(tmp_path_factory):
             "OPSPILOT_AUTOLOAD_KNOWLEDGE": "true",
             "OPSPILOT_LOG_LEVEL": "WARNING",
             "OPSPILOT_JWT_SECRET": "",
+            # 钉死限流开关：避免宿主 shell 里 export 的 OPSPILOT_RATE_LIMIT_ENABLED 泄漏进测试把 TestClient 打成 429
+            "OPSPILOT_RATE_LIMIT_ENABLED": "false",
         }
     )
 
