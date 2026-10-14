@@ -27,24 +27,32 @@ class LLMClient(Protocol):
 class OpenAICompatibleLLM:
     """DeepSeek / OpenAI / 任意 OpenAI 兼容端点共用一套（/chat/completions）。"""
 
-    def __init__(self, api_key, model, base_url, temperature=0.1, timeout=90.0, json_mode=False):
+    def __init__(self, api_key, model, base_url, temperature=0.1, timeout=90.0, json_mode=False, max_tokens=None):
         self.api_key = api_key
         self.model = model
         self.base_url = (base_url or "https://api.openai.com/v1").rstrip("/")
         self.temperature = temperature
         self.timeout = timeout
         self.json_mode = json_mode
+        self.max_tokens = max_tokens
         self.name = f"openai-compatible:{model}"
 
-    def chat(self, system: str, user: str, *, json_mode: bool | None = None) -> str:
-        payload = {
+    def _base_payload(self) -> dict:
+        payload: dict = {
             "model": self.model,
             "temperature": self.temperature,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+            "messages": [],
         }
+        if self.max_tokens:
+            payload["max_tokens"] = self.max_tokens
+        return payload
+
+    def chat(self, system: str, user: str, *, json_mode: bool | None = None) -> str:
+        payload = self._base_payload()
+        payload["messages"] = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
         use_json = self.json_mode if json_mode is None else json_mode
         if use_json:
             payload["response_format"] = {"type": "json_object"}
@@ -65,16 +73,13 @@ class OpenAICompatibleLLM:
         return {"provider": "openai-compatible", "model": self.model}
 
     def chat_with_tools(self, system: str, user: str, tools: list[dict]) -> dict:
-        payload = {
-            "model": self.model,
-            "temperature": self.temperature,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "tools": tools,
-            "tool_choice": "auto",
-        }
+        payload = self._base_payload()
+        payload["messages"] = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
         response = httpx.post(
             f"{self.base_url}/chat/completions",
             headers={"Authorization": f"Bearer {self.api_key}"},
@@ -99,6 +104,7 @@ def build_llm(settings: Settings) -> tuple[LLMClient | None, list[str]]:
         temperature=target["temperature"],
         timeout=target["timeout"],
         json_mode=target["json_mode"],
+        max_tokens=target.get("max_tokens"),
     )
     log.info("LLM 生效：%s @ %s", target["provider"], target["base_url"])
     return client, notes

@@ -9,8 +9,10 @@ from app.services.citation import (
     build_citations,
     citation_support,
     sentence_support_report,
+    strip_citation_markers,
     unsupported_numbers,
     used_citation_indexes,
+    verify_answer,
 )
 
 
@@ -70,6 +72,71 @@ class TestUnsupportedNumbers:
 
     def test_empty_source_flags_all_numbers(self):
         assert unsupported_numbers("阈值 50", []) == {"50"}
+
+    def test_citation_markers_are_not_numbers(self):
+        """[1] 是引用标记，不是答案编造的数字 —— 否则每条带引用的答案都会误报。"""
+        assert unsupported_numbers("错误率阈值为 50% [1]。", ["错误率阈值为 50%。"]) == set()
+
+    def test_multidigit_marker_ignored(self):
+        assert unsupported_numbers("结论如下 [12]。", ["结论如下。"]) == set()
+
+    def test_real_number_alongside_marker_still_flagged(self):
+        assert unsupported_numbers("错误率阈值为 80% [1]。", ["错误率阈值为 50%。"]) == {"80", "80%"}
+
+
+class TestStripCitationMarkers:
+    def test_removes_markers(self):
+        assert "[1]" not in strip_citation_markers("阈值 50% [1]，窗口 10 秒 [2]。")
+
+    def test_keeps_other_brackets(self):
+        assert "[附录A]" in strip_citation_markers("参见 [附录A]。")
+
+
+class TestVerifyAnswer:
+    _SRC = "熔断器在错误率超过 50% 时打开，滑动窗口为 10 秒。"
+
+    def _cites(self, texts: list[str]):
+        return build_citations(
+            [ScoredChunk(chunk=Chunk(chunk_id=f"c{i}", doc_id="d", text=t), score=0.5)
+             for i, t in enumerate(texts, start=1)]
+        )
+
+    def test_grounded_answer_passes(self):
+        cites = self._cites([self._SRC])
+        verdict = verify_answer("熔断器在错误率超过 50% 时打开 [1]。", cites, source_texts=[self._SRC])
+        assert verdict.ok, verdict.reasons
+
+    def test_fabricated_number_is_rejected(self):
+        """运维场景最危险：把阈值编造成另一个数。"""
+        cites = self._cites([self._SRC])
+        verdict = verify_answer("熔断器在错误率超过 80% 时打开 [1]。", cites, source_texts=[self._SRC])
+        assert verdict.refused
+        assert "80" in verdict.fabricated_numbers
+        assert any("数字" in r for r in verdict.reasons)
+
+    def test_missing_citation_index_is_rejected(self):
+        cites = self._cites([self._SRC])
+        verdict = verify_answer("熔断器在错误率超过 50% 时打开 [7]。", cites, source_texts=[self._SRC])
+        assert verdict.refused
+        assert verdict.missing_citations == {7}
+
+    def test_unsupported_sentences_are_rejected(self):
+        cites = self._cites([self._SRC])
+        answer = "公司年会安排在三楼。食堂今天供应红烧肉。熔断阈值见资料 [1]。"
+        verdict = verify_answer(answer, cites, source_texts=[self._SRC])
+        assert verdict.refused
+        assert any("支撑" in r for r in verdict.reasons)
+
+    def test_full_text_beats_truncated_snippet(self):
+        """数字落在 snippet 160 字截断之后时，必须靠完整原文判为有据。"""
+        long_src = "开头填充内容。" * 30 + "连接池上限为 50。"
+        cites = self._cites([long_src])
+        verdict = verify_answer("连接池上限为 50 [1]。", cites, source_texts=[long_src])
+        assert verdict.ok, verdict.reasons
+
+    def test_empty_answer_sentences_pass_vacuously(self):
+        verdict = verify_answer("", self._cites([self._SRC]), source_texts=[self._SRC])
+        assert verdict.ok
 
 
 class TestCitationSupport:

@@ -30,7 +30,9 @@ def ask(
     scope_service = container.knowledge.set_service_scope(payload.service)
     hits = container.retrieve(payload.question, top_k=top_k, service=scope_service)
 
-    result = compose_answer(payload.question, hits, container.llm, settings)
+    result = compose_answer(
+        payload.question, hits, container.llm, settings, history=payload.history
+    )
     refused = container.llm is None or result.confidence < settings.min_confidence
 
     citations = build_citations(hits)

@@ -81,11 +81,11 @@ class Settings(BaseSettings):
     rerank_top_n: int = 5
     rrf_k: int = 60
     min_relevance: float = 0.06
-    max_agent_steps: int = 6
-    max_rewrite_rounds: int = 2
 
     # ---------- 可信与安全 ----------
-    require_citation: bool = True
+    # verify_citations 打开后，LLM 答复要过引用校验（编造数字 / 无据可依 / 引用不存在），
+    # 不通过则带原因重试，仍不通过转拒答。关掉可对比"裸生成"的差别。
+    verify_citations: bool = True
     min_confidence: float = 0.35
     min_citation_support: float = 0.25
 
@@ -134,6 +134,7 @@ class Settings(BaseSettings):
             "temperature": self.llm_temperature,
             "timeout": self.llm_timeout_s,
             "json_mode": self.llm_json_mode,
+            "max_tokens": self.llm_max_tokens,
         }
 
     @property
