@@ -1,0 +1,53 @@
+# 行尾策略：仓库内与检出统一为 LF。
+#
+# 背景：本机 core.autocrlf=true，检出时会把 LF 转成 CRLF，于是每次提交都刷
+# "LF will be replaced by CRLF" 警告，且同一个文件在不同机器上可能以不同行尾入库。
+# 这里用 eol=lf 显式覆盖 autocrlf，让所有人、所有平台的检出结果一致。
+#
+# 注意：*.bat / *.cmd / *.ps1 例外，见下方 —— 它们是 Windows 专用脚本，
+# 必须是 CRLF，否则部分解释器会报错。
+
+# ---------- 默认：文本文件统一 LF ----------
+* text=auto eol=lf
+
+# ---------- 显式声明（避免 Git 靠内容猜测）----------
+*.py       text eol=lf
+*.pyi      text eol=lf
+*.md       text eol=lf
+*.rst      text eol=lf
+*.txt      text eol=lf
+*.yml      text eol=lf
+*.yaml     text eol=lf
+*.toml     text eol=lf
+*.json     text eol=lf
+*.ini      text eol=lf
+*.cfg      text eol=lf
+*.sql      text eol=lf
+*.sh       text eol=lf
+Dockerfile text eol=lf
+Makefile   text eol=lf
+
+# ---------- Windows 脚本：必须 CRLF ----------
+*.bat      text eol=crlf
+*.cmd      text eol=crlf
+*.ps1      text eol=crlf
+
+# ---------- 二进制：禁止行尾转换与文本 diff ----------
+*.png      binary
+*.jpg      binary
+*.jpeg     binary
+*.gif      binary
+*.ico      binary
+*.webp     binary
+*.pdf      binary
+*.zip      binary
+*.gz       binary
+*.xlsx     binary
+*.docx     binary
+*.pptx     binary
+*.woff     binary
+*.woff2    binary
+*.ttf      binary
+*.otf      binary
+*.so       binary
+*.pyd      binary
