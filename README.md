@@ -17,7 +17,7 @@
 # 1. 安装依赖（核心链路零外部依赖，无需 Docker）
 python -m pip install -e ".[dev]"
 
-# 2. 灌入示例知识库（8 篇运维文档）
+# 2. 灌入示例知识库（14 篇运维文档）
 python scripts/seed.py
 
 # 3. 启动服务
@@ -69,8 +69,9 @@ FastAPI 接入层（Pydantic v2 契约 + 可选 JWT + request_id 链路追踪）
   memory（离线/测试）  │  Qdrant（生产）  │  pgvector
 ```
 
-**全链路可降级**：向量库 `qdrant → pgvector → memory`，Embedding `ollama → openai → local`，
-LLM `deepseek → openai → ollama → fallback`。
+**分级降级**：向量库按配置选一（`qdrant` / `pgvector` / `memory`），不可用时落到 `memory`；
+Embedding 选一（`ollama` / `openai` / `local`），远端不可用时落到 `local`；LLM 未就绪则整条生成链降级为拒答。
+注意这是**「选一 + 离线兜底」**，不是逐级回退的多级级联：配置了 qdrant 就不会自动再试 pgvector。
 `/healthz` 会**如实上报**当前实际生效的后端和所有降级原因，不会假装调用了什么。
 
 ### services 层数据流与关系
@@ -116,8 +117,8 @@ graph LR
 | `向量检索 / BM25 → fuse` | 两路独立榜单 | RRF **只看名次不看分**，解决两路量纲不一致 |
 | `fuse → rerank` | `retriever="rrf"` 融合榜 | 再用查询词覆盖率精排 |
 | `rerank → compose_answer` | `retriever="rerank"` 证据 | 拼进 prompt 的 `[1][2]…` 资料 |
-| `citation → compose_answer` | `Citation` 卡片 | 三层引用校验的载体 |
-| `compose_answer → TicketStore` | `needs_human` 工单 | LLM 离线/解析失败时的兜底转人工 |
+| `citation → compose_answer` | `Citation` 卡片 | 引用校验的载体（`verify_answer` 逐句比对） |
+| `compose_answer → TicketStore` | `needs_human` 工单 | LLM 离线 / 解析失败 / **引用校验未通过**时的兜底转人工 |
 
 > 一句话概括：`KnowledgeBase` 是写入的唯一入口，`VectorStore` 是读写的交汇点，
 > `ScoredChunk` 的 `retriever` 字段像接力棒一样在 `vector → rrf → rerank` 之间标记「这一分是谁给的」。
@@ -147,6 +148,25 @@ LangGraph 状态图：`classify` 站先分意图（LLM 主轨，失败落关键�
 `create_ticket`（真 Function Calling：`chat_with_tools` 走 `tool_calls` 抽四字段；逐级退回 JSON-prompt、再退回**兜底建单**，回答自带"（兜底建单）"标记）、
 `chat`（LLM 闲聊引导；故障时落引导模板并声明原因）。
 工具调用经 `tools_used` 诚实申报，降级全程可见、绝不静默。
+
+### 引用校验：把"绝不编造"从提示词变成代码
+
+提示词里写「绝不编造操作步骤」只是**请求**，模型不遵守时没有任何后果。
+`app/services/citation.py` 的 `verify_answer` 把这句话变成可执行的判定，
+在 `compose_answer` 里对每一条 LLM 答复强制执行：
+
+| 检查 | 判据 | 为什么 |
+|---|---|---|
+| 数字一致性 | 答案里的数字必须出现在被引原文中（`[n]` 标记不算数字） | 运维场景下编造阈值代价最高 |
+| 引用存在性 | 正文引用的 `[n]` 必须真实存在 | 防止指向不存在的来源 |
+| 句子支撑度 | 支撑度低于 `min_citation_support` 的句子占比不得超过一半 | 防止大段无据可依的发挥 |
+
+未通过时**不直接拒答**，而是把失败原因回灌给模型重试（`llm_max_retries` 次），
+给它改正的机会；仍不通过才转人工，并在答复里说明原因。
+开关为 `OPSPILOT_VERIFY_CITATIONS`（默认开），关掉即可对比"裸生成"的差别。
+
+> 一个实现细节：抽取数字前必须先摘掉 `[1]` 这类引用标记，
+> 否则标记里的 1 会被当成编造的数字，每条带引用的答案都会误报。
 
 ```bash
 curl -X POST http://127.0.0.1:8000/v1/agent \
@@ -196,28 +216,47 @@ tags: [数据库, 连接池]
 python -m pytest -q
 ```
 
-测试把环境钉死在 `memory + local + fallback`，**不依赖网络与密钥**，共 162 个用例（已由 GitHub Actions CI 在 py3.11 / py3.12 双版本自动把关）。
+测试把环境钉死在 `memory + local + fallback`，**不依赖网络与密钥**，共 199 个用例（已由 GitHub Actions CI 在 py3.11 / py3.12 双版本自动把关）。
 
 ---
 
-## 评测（D7 四维覆盖）
+## 评测
 
 ```bash
-python scripts/eval.py
+python scripts/eval.py          # 固定离线配置（默认，可复现）
+python scripts/eval.py --live   # 按本机 .env 的真实后端评测
 ```
 
-18 条用例分四类，覆盖检索鲁棒性与诚实拒答能力：
+30 条用例分四类，覆盖检索鲁棒性与诚实拒答能力（29 个知识块）：
 
-| 类别 | 用例数 | 混合 Top-1 | 混合+精排 Top-1 | Top-3 |
-|---|---|---|---|---|
-| 正面（精确查询） | 9 | 9/9 | 9/9 | 9/9 |
-| 同义换词 | 3 | 2/3 | 2/3 | 3/3 |
-| 跨文档 OR | 3 | 3/3 | 3/3 | 3/3 |
-| 阴性对照（应拒答） | 3 | 3/3 | 3/3 | 3/3 |
-| **总计** | **18** | **17/18** | **17/18** | **18/18** |
+| 类别 | 用例数 | 混合 Top-1 | 混合+精排 Top-1 | 混合 Top-3 | 混合+精排 Top-3 |
+|---|---|---|---|---|---|
+| 正面（精确查询） | 15 | 14/15 | 14/15 | 15/15 | 15/15 |
+| 同义换词 | 6 | 4/6 | 4/6 | 5/6 | 6/6 |
+| 跨文档 OR | 3 | 3/3 | 2/3 | 3/3 | 3/3 |
+| 阴性对照（应拒答） | 6 | 6/6 | 6/6 | 6/6 | 6/6 |
+| **总计** | **30** | **27/30** | **26/30** | **29/30** | **30/30** |
+
+**精排的真实取舍**：启发式精排（查询覆盖率）把 Top-3 从 29/30 提到 **30/30**，
+但 Top-1 从 27/30 掉到 **26/30** —— 它偏爱"包含更多查询词"的块，偶尔把更贴切的
+短块挤到第二。这是可观测的取舍，不是无条件增益。
+
+### 评测口径的两个坑（都已修，并加了自检）
+
+1. **量纲不匹配会让阴性对照恒真。** 混合检索的输出分是 RRF 倒数排名分，
+   两路融合的理论上限只有 `2/(k+1) ≈ 0.0328`；而 `min_relevance=0.06` 是按
+   余弦相似度量纲定的。拿 0.06 去卡 0.0328 的分，`all(score < 0.06)` 恒为真，
+   阴性对照永远"通过"——这个刹车形同虚设。
+   现在改用**量纲无关**的判据：查询内容词被命中块覆盖的比例。
+2. **评测必须可复现。** 原先 `eval.py` 直接继承 `.env`，本机指向 pgvector + 远端
+   embedding 时，同一份代码会跑出不同数字（实测 21/24 vs 23/24）。现在默认钉死在
+   离线配置，需要真实配置时显式 `--live`。
+
+`eval.py` 结束时会做**可分离性自检**：阳性最低覆盖率与阴性最高覆盖率之间必须存在
+空隙且阈值落在其中，否则以非零码退出。当前空隙为 `(0.000, 0.222)`，阈值 `0.11`。
 
 > M1 纯向量基线：Top-1 7/9、Top-3 9/9（仅正面 9 题、无阴性对照）。
-> M2 引入 BM25+RRF+精排后提升至 9/9、9/9；D7 扩充到 18 题四维覆盖，并加入阴性对照确保评测有“刹车”。
+> M2 引入 BM25+RRF 后正面提升至 9/9、9/9；D7 扩到 30 题四维覆盖并补上真正可触发的阴性对照。
 
 ---
 
@@ -247,9 +286,9 @@ app/
   utils/
     text.py              中英混合分词、无损分句、数值抽取
     logging.py           日志 + request_id 上下文
-data/kb/                 8 篇示例运维知识库
+data/kb/                 14 篇示例运维知识库（29 个块）
 scripts/seed.py          知识库灌入
-tests/                   162 个用例，离线可跑
+tests/                   199 个用例，离线可跑
 ```
 
 ---
@@ -268,7 +307,7 @@ tests/                   162 个用例，离线可跑
 | 5.3 嵌入模型 + 向量库 | 🟡 | Embedding 与 LLM 解耦、可插拔；向量库 memory/Qdrant/pgvector。清单点名的 Milvus/Pinecone/ES/FAISS/Chroma 未覆盖 | [milvus-io/milvus](https://github.com/milvus-io/milvus) · [chroma-core/chroma](https://github.com/chroma-core/chroma) · [facebookresearch/faiss](https://github.com/facebookresearch/faiss) |
 | 5.4 向量索引（HNSW / 倒排） | 📋 | 目前依赖现成库，尚未在代码 / 文档层讲清底层索引与选型 | [milvus-io/milvus](https://github.com/milvus-io/milvus) · [elastic/elasticsearch](https://github.com/elastic/elasticsearch) |
 | 5.5 多路召回 + 粗排 / 精排 | ✅ | BM25 + RRF 融合 + 启发式 Reranker 已接入 `/v1/query`、`/v1/ask` 与 Agent 链路 | [infiniflow/ragflow](https://github.com/infiniflow/ragflow) |
-| 5.6 评估（RAGAS 等） | 🟡 | `scripts/eval.py` 启发式评测（Top-1/3、MRR + 阴性对照）已建立；缺 RAGAS 类事实性指标 | [vibrantlabsai/ragas](https://github.com/vibrantlabsai/ragas) |
+| 5.6 评估（RAGAS 等） | 🟡 | `scripts/eval.py` 启发式评测（Top-1/3、MRR + 可触发的阴性对照 + 可分离性自检）已建立；缺 RAGAS 类事实性指标 | [vibrantlabsai/ragas](https://github.com/vibrantlabsai/ragas) |
 | 5.7 图 RAG / 多模态 RAG | 📋 | 尚无相关实现 | [microsoft/graphrag](https://github.com/microsoft/graphrag) · [HKUDS/LightRAG](https://github.com/HKUDS/LightRAG) |
 | 5.8 LlamaIndex | 📋 | 目前自研检索链路，未引入 LlamaIndex | [run-llama/llama_index](https://github.com/run-llama/llama_index) |
 
