@@ -32,17 +32,33 @@ class TestAgent:
         assert body["refused"] is False
 
     def test_service_filter_applies_in_graph(self, client):
+        """service 过滤的判据是「结果里不出现其它 service 的文档」，而不是写死文件名。
+
+        原先写死 01/05/06 三个前缀，语料扩充后 17/28 也合法地挂了 pay-gateway，
+        测试就假红了。改成从语料元数据推导期望集合，语料增删都不会误报，
+        同时仍能抓住真正的越权（返回了别的 service 的文档）。
+        """
+        import pathlib
+
+        from app.services.document_loader import read_text_file, service_from_meta
+
+        kb_dir = pathlib.Path(__file__).resolve().parents[1] / "data" / "kb"
+        pay_gateway = {
+            p.name for p in kb_dir.glob("*.md")
+            if service_from_meta(read_text_file(p)[0]) == "pay-gateway"
+        }
+        assert pay_gateway, "语料里应至少有一篇 pay-gateway 文档"
+
         response = client.post("/v1/agent", json={
             "question": "连接池耗尽怎么处理", "service": "pay-gateway"})
         assert response.status_code == 200
         body = response.json()
         assert body["intent"] == "retrieve"
         assert body["citations"], "应命中 pay-gateway 手册"
-        # pay-gateway 标签挂在 01/05/06 三篇手册上；不带 service 时 08-值班交接也会被召回，
-        # 带上 service 后必须被排除——这才是过滤真正生效的证据
+
         sources = [c["source"] for c in body["citations"]]
-        assert all(s.startswith(("01-", "05-", "06-")) for s in sources), sources
-        assert not any("08-" in s for s in sources), f"service 过滤未排除越权文档: {sources}"
+        leaked = [s for s in sources if s not in pay_gateway]
+        assert not leaked, f"service 过滤未排除越权文档: {leaked}"
 
     def test_top_k_applies_in_graph(self, client):
         response = client.post("/v1/agent", json={
