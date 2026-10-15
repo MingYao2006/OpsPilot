@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 
@@ -75,10 +76,80 @@ class TestIdUniqueness:
 
     def test_unparseable_ids_do_not_break_counter(self, store):
         store.path.write_text(
-            json.dumps([{"ticket_id": "legacy-abc"}, {"ticket_id": "TCK-0007"}]), encoding="utf-8"
+            json.dumps([{"ticket_id": "legacy-abc"}, {"ticket_id": "TCK-0007"}]),
+            encoding="utf-8",
         )
         fresh = store.create(TicketIn(title="新故障描述", summary="新现象", priority="P3"))
         assert fresh.ticket_id == "TCK-0008"
+
+
+class TestCrossProcessSafety:
+    """跨进程安全：threading.Lock 挡不住多进程，必须靠文件锁 + 原子写。
+
+    用真实子进程验证（不是模拟）：每个子进程独立 import、独立打开文件，
+    这才等价于 uvicorn 多 worker 的场景。
+    """
+
+    _WORKER = """
+import sys
+sys.path.insert(0, {root!r})
+from app.config import Settings
+from app.models import TicketIn
+from app.services.tickets import TicketStore
+
+store = TicketStore(Settings(ticket_store={path!r}))
+t = store.create(TicketIn(title="跨进程故障描述", summary="跨进程现象", priority="P3"))
+print(t.ticket_id)
+"""
+
+    def test_parallel_processes_never_duplicate_ids(self, tmp_path):
+        import subprocess
+        import sys
+
+        root = str(Path(__file__).resolve().parents[1])
+        target = tmp_path / "cross.json"
+        script = tmp_path / "worker.py"
+        script.write_text(
+            self._WORKER.format(root=root, path=str(target)), encoding="utf-8"
+        )
+
+        n = 6
+        procs = [
+            subprocess.Popen(
+                [sys.executable, str(script)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            for _ in range(n)
+        ]
+        ids, errs = [], []
+        for p in procs:
+            out, err = p.communicate(timeout=90)
+            if p.returncode != 0:
+                errs.append(err.strip()[-300:])
+            else:
+                ids.append(out.strip())
+
+        assert not errs, f"子进程失败：{errs}"
+        assert len(ids) == n, ids
+        assert len(set(ids)) == n, f"跨进程发出重复编号：{sorted(ids)}"
+
+        # 落盘结果必须完整可解析（原子写的验证）
+        rows = json.loads(target.read_text(encoding="utf-8"))
+        assert len(rows) == n, f"落盘条数不符：{len(rows)} != {n}"
+
+    def test_atomic_write_leaves_no_partial_file(self, tmp_path):
+        """写入过程中不得出现半截 JSON：临时文件必须与数据文件分离。"""
+        from app.services.tickets import TicketStore
+
+        target = tmp_path / "atomic.json"
+        store = TicketStore(Settings(ticket_store=target))
+        store.create(TicketIn(title="原子写验证", summary="验证现象", priority="P3"))
+
+        leftovers = [p.name for p in tmp_path.glob("*.tmp")]
+        assert leftovers == [], f"残留临时文件：{leftovers}"
+        assert json.loads(target.read_text(encoding="utf-8"))
 
 
 def _create_one(client) -> str:
