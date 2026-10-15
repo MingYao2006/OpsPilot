@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     rerank_top_n: int = 5
     rrf_k: int = 60
     min_relevance: float = 0.06
+    # 精排里「查询覆盖率」的权重（0~1）。0 = 纯 RRF（等价不精排），1 = 旧版纯覆盖率。
+    # 默认 0.35：实测纯覆盖率在语义向量下是负增益（Top-1 23→21），
+    # 降权后保留粗排共识，只让覆盖率做微调。
+    rerank_cov_weight: float = 0.35
 
     # ---------- 可信与安全 ----------
     # verify_citations 打开后，LLM 答复要过引用校验（编造数字 / 无据可依 / 引用不存在），

@@ -57,7 +57,10 @@ class Container:
         fused = fuse([vec_hits, bm25_hits], k=settings.rrf_k, top_k=candidate_k)  # 粗排多召回
 
         if use_rerank:
-            return rerank(question, fused, top_n=settings.rerank_top_n)[:top_k]  # 精排再截
+            return rerank(
+                question, fused, top_n=settings.rerank_top_n,
+                cov_weight=settings.rerank_cov_weight,
+            )[:top_k]  # 精排再截
         return fused[:top_k]
 
 def build_container(settings: Settings) -> Container:
