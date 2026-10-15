@@ -17,7 +17,14 @@ dependencies = [
 [project.optional-dependencies]
 qdrant = ["qdrant-client>=1.10"]
 pg = ["sqlalchemy>=2.0", "psycopg[binary]>=3.1"]
-dev = ["pytest>=8.0"]
+# dev 显式带上两套后端客户端：测试用替身 client 覆盖适配逻辑（不需要真服务），
+# 若客户端缺失这些用例会被 skip，CI 就失去了这层保护。
+dev = [
+    "pytest>=8.0",
+    "qdrant-client>=1.10",
+    "sqlalchemy>=2.0",
+    "psycopg[binary]>=3.1",
+]
 
 [build-system]
 requires = ["setuptools>=68"]
