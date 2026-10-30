@@ -37,9 +37,10 @@ def types_of(body: str) -> list[str]:
 
 
 class FakeStreamingLLM:
-    """假流式 LLM：chat_stream 返回可迭代字符串即可。
+    """假流式 LLM：提供异步流式接口。
 
-    记录 calls 以便断言「提示词里确实带了检索到的资料」。
+    接口必须是 chat_stream_async（异步生成器），
+    因为 /v1/ask/stream 用 async for 消费——用同步生成器会 TypeError。
     """
 
     name = "fake-stream"
@@ -49,11 +50,12 @@ class FakeStreamingLLM:
         self.raises = raises
         self.calls: list[tuple[str, str]] = []
 
-    def chat_stream(self, system: str, user: str):
+    async def chat_stream_async(self, system: str, user: str):
         self.calls.append((system, user))
         if self.raises is not None:
             raise self.raises
-        yield from self.pieces
+        for piece in self.pieces:
+            yield piece
 
 
 # ---------------- fixture ----------------

@@ -5,7 +5,7 @@ llm 不可用时 build_llm 返回 None，由上层（/v1/ask）降级为抽取�
 from __future__ import annotations
 
 import json
-from typing import Protocol, Iterator
+from typing import Protocol, Iterator, AsyncIterator
 
 import httpx
 
@@ -13,6 +13,31 @@ from app.config import Settings
 from app.utils.logging import get_logger
 
 log = get_logger(__name__)
+
+# OpenAI 兼容流式响应的一行形如：data: {"choices":[{"delta":{"content":"支"}}]}
+# 终止标记是 data: [DONE]；另外流里还会有空行与心跳行，都要跳过。
+_SSE_PREFIX = "data: "
+_SSE_DONE = "data: [DONE]"
+
+
+def _parse_sse_line(line: str) -> str | None:
+    """解析一行 SSE，返回增量文本；非内容行返回 None。
+
+    同步与异步两条流式路径共用，避免两份实现漂移。
+    注意流式用 delta 而不是 message，且首帧只带 role 没有 content。
+    """
+    if not line or not line.startswith(_SSE_PREFIX):
+        return None
+    if line.strip() == _SSE_DONE:
+        return None
+    try:
+        payload = json.loads(line[len(_SSE_PREFIX):])
+        delta = payload["choices"][0].get("delta", {})
+    except (json.JSONDecodeError, KeyError, IndexError):
+        # 单行损坏不应中断整条流：跳过继续读下一行
+        return None
+    content = delta.get("content")
+    return content or None
 
 
 class LLMClient(Protocol):
@@ -24,6 +49,7 @@ class LLMClient(Protocol):
 
     def chat_with_tools(self, system: str, user: str, tools: list[dict]) -> dict: ...
 
+    async def chat_stream_async(self, system: str, user: str) -> AsyncIterator[str]: ...
 
 class OpenAICompatibleLLM:
     """DeepSeek / OpenAI / 任意 OpenAI 兼容端点共用一套（/chat/completions）。"""
@@ -92,6 +118,11 @@ class OpenAICompatibleLLM:
         return data["choices"][0]["message"]
 
     def chat_stream(self, system: str, user: str) -> Iterator[str]:
+        """同步流式：给同步调用方用（如脚本、测试）。
+
+        注意：在网络等待期间会阻塞当前线程。异步接口（/v1/ask/stream）
+        必须用 chat_stream_async，否则会卡住整个事件循环。
+        """
         payload = self._base_payload()
         payload["messages"] = [
             {"role": "system", "content": system},
@@ -108,17 +139,35 @@ class OpenAICompatibleLLM:
         ) as response:
             response.raise_for_status()
             for line in response.iter_lines():
-                if line=="":
-                    continue
-                if not line.startswith("data: "):
-                    continue
-                if line.strip() == "data: [DONE]":
-                    break
-                data = json.loads(line[6:])
-                delta = data["choices"][0].get("delta", {})
-                content = delta.get("content")
+                content = _parse_sse_line(line)
                 if content:
                     yield content
+
+    async def chat_stream_async(self, system: str, user: str) -> AsyncIterator[str]:
+        """异步流式：在等网络时让出事件循环，不阻塞其他请求。
+
+        与 chat_stream 的差异只有三处：async with / aiter_lines() / async for。
+        解析逻辑抽到 _parse_sse_line 复用，避免两份实现漂移。
+        """
+        payload = self._base_payload()
+        payload["messages"] = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        payload["stream"] = True
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with client.stream(
+                    "POST",
+                    f"{self.base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    json=payload,
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    content = _parse_sse_line(line)
+                    if content:
+                        yield content
 
 
 

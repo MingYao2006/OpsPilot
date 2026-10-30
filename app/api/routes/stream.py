@@ -11,6 +11,7 @@ from app.api.deps import get_container
 from app.container import Container
 from app.models import AgentRequest
 from app.services.citation import build_citations
+from starlette.concurrency import run_in_threadpool
 
 router = APIRouter(prefix="/v1", tags=["stream"])
 
@@ -50,7 +51,10 @@ async def ask_stream(
         settings = container.settings
         top_k = payload.top_k or settings.top_k
         scope = container.knowledge.set_service_scope(payload.service)
-        hits = container.retrieve(payload.question, top_k=top_k, service=scope)
+        hits = await run_in_threadpool(container.retrieve,
+                                       payload.question,
+                                       top_k=top_k,
+                                       service=scope)
 
         # ② 构造引用并发送
         citations = build_citations(hits)
@@ -61,7 +65,9 @@ async def ask_stream(
 
         try:
             # 2) 逐 token 流式输出
-            for piece in llm_client.chat_stream(STREAM_SYSTEM, user_prompt):
+            #    必须用 chat_stream_async：同步版在等网络时会阻塞整个事件循环，
+            #    3 秒的生成时间会把其他所有并发请求一起卡住
+            async for piece in llm_client.chat_stream_async(STREAM_SYSTEM, user_prompt):
                 yield _sse({"type": "token", "text": piece})
         except Exception as exc:  # noqa: BLE001
             yield _sse({"type": "error", "message": str(exc)})
