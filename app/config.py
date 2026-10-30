@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     knowledge_dir: Path = Path("data/kb")
     state_dir: Path = Path("work/state")
     ticket_store: Path = Path("work/state/tickets.json")
+    # 控制启动时是否自动把data / kb入库
     autoload_knowledge: bool = True
 
     # ---------- 向量库 ----------
@@ -103,6 +104,7 @@ class Settings(BaseSettings):
 
     @field_validator("chunk_overlap")
     @classmethod
+    # chunk_overlap必须 < chunk_size，否则切块逻辑死循环
     def _overlap_must_be_smaller(cls, v: int, info) -> int:
         size = info.data.get("chunk_size", 480)
         if v >= size:

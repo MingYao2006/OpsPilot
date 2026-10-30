@@ -4,7 +4,8 @@ llm 不可用时 build_llm 返回 None，由上层（/v1/ask）降级为抽取�
 """
 from __future__ import annotations
 
-from typing import Protocol
+import json
+from typing import Protocol, Iterator
 
 import httpx
 
@@ -90,6 +91,36 @@ class OpenAICompatibleLLM:
         data = response.json()
         return data["choices"][0]["message"]
 
+    def chat_stream(self, system: str, user: str) -> Iterator[str]:
+        payload = self._base_payload()
+        payload["messages"] = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        payload["stream"] = True
+
+        with httpx.stream(
+                "POST",
+                f"{self.base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                json=payload,
+                timeout=self.timeout,
+        ) as response:
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if line=="":
+                    continue
+                if not line.startswith("data: "):
+                    continue
+                if line.strip() == "data: [DONE]":
+                    break
+                data = json.loads(line[6:])
+                delta = data["choices"][0].get("delta", {})
+                content = delta.get("content")
+                if content:
+                    yield content
+
+
 
 def build_llm(settings: Settings) -> tuple[LLMClient | None, list[str]]:
     notes: list[str] = []
@@ -108,3 +139,4 @@ def build_llm(settings: Settings) -> tuple[LLMClient | None, list[str]]:
     )
     log.info("LLM 生效：%s @ %s", target["provider"], target["base_url"])
     return client, notes
+

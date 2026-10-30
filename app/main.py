@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.routes import ask
 from app.api.routes import agent
+from app.api.routes import stream
 from app.api.routes import health, ingest, query,tickets
 from app.config import get_settings
 from app.container import build_container
@@ -88,6 +89,7 @@ def create_app() -> FastAPI:
     app.include_router(ask.router)
     app.include_router(agent.router)
     app.include_router(tickets.router)
+    app.include_router(stream.router)
 
     @app.exception_handler(RequestValidationError)
     async def _validation_error_handler(request: Request, exc: RequestValidationError):
