@@ -10,3 +10,8 @@ work/
 .idea/
 docker-compose.override.yml
 pytest-of-*/
+
+# 前端依赖（web/ 有自己的 .gitignore，这条兜住根目录误建的情况）
+node_modules/
+.pnpm-store/
+
